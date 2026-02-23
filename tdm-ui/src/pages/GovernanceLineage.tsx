@@ -1,0 +1,101 @@
+import { useState } from "react";
+import { motion } from "framer-motion";
+import { ArrowRight, Lock, Clock } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/client";
+
+const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.06 } } };
+const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0, transition: { duration: 0.4 } } };
+
+const GovernanceLineage = () => {
+  const [selectedDatasetId, setSelectedDatasetId] = useState<string>("");
+  const { data: datasets = [] } = useQuery({ queryKey: ["datasets"], queryFn: () => api.listDatasets() });
+  const { data: lineage = [] } = useQuery({
+    queryKey: ["lineage", selectedDatasetId],
+    queryFn: () => api.getLineage(selectedDatasetId),
+    enabled: !!selectedDatasetId,
+  });
+  const { data: auditLogs = [] } = useQuery({ queryKey: ["audit-logs"], queryFn: () => api.listAuditLogs() });
+  const events = auditLogs.slice(0, 5).map((log) => ({
+    action: log.action,
+    user: log.user,
+    time: log.time,
+  }));
+
+  const lineageSteps =
+    lineage.length > 0
+      ? lineage.map((l, i) => ({
+          label: `${l.source_type} → ${l.target_type}`,
+          type: (i === 0 ? "source" : i === lineage.length - 1 ? "target" : "transform") as "source" | "target" | "transform",
+        }))
+      : [{ label: selectedDatasetId ? "No lineage for this dataset" : "Select a dataset to view lineage", type: "source" as const }];
+
+  return (
+    <motion.div variants={container} initial="hidden" animate="show" className="space-y-6 max-w-[1600px] mx-auto">
+      <motion.div variants={item}>
+        <h1 className="text-2xl font-display font-bold text-foreground">Governance & Lineage</h1>
+        <p className="text-sm text-muted-foreground mt-1">Data lineage tracking and compliance (single user mode)</p>
+      </motion.div>
+
+      <motion.div variants={item} className="glass-card p-5">
+        <h2 className="text-sm font-semibold text-foreground mb-2">Dataset Lineage</h2>
+        <div className="mb-3">
+          <label className="text-xs text-muted-foreground block mb-1">Dataset</label>
+          <select
+            value={selectedDatasetId}
+            onChange={(e) => setSelectedDatasetId(e.target.value)}
+            className="w-full max-w-md px-3 py-2 rounded-lg bg-muted/50 border border-border text-sm"
+          >
+            <option value="">Select dataset</option>
+            {datasets.map((d) => (
+              <option key={d.id} value={d.id}>{d.name || d.id.slice(0, 8)} ({d.source_type})</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 flex-wrap">
+          {lineageSteps.map((step, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <div className={`px-4 py-3 rounded-lg text-xs font-medium whitespace-nowrap ${
+                step.type === "source" ? "bg-primary/10 text-primary border border-primary/20" :
+                step.type === "target" ? "bg-success/10 text-success border border-success/20" :
+                "bg-muted text-foreground/70 border border-border/50"
+              }`}>{step.label}</div>
+              {i < lineageSteps.length - 1 && <ArrowRight className="w-3 h-3 text-muted-foreground/40 flex-shrink-0" />}
+            </div>
+          ))}
+        </div>
+      </motion.div>
+
+      <div className="grid grid-cols-2 gap-6">
+        <motion.div variants={item} className="glass-card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Lock className="w-4 h-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Access (Single User)</h2>
+          </div>
+          <p className="text-sm text-muted-foreground">No RBAC — single user mode. All features are available without role restrictions.</p>
+        </motion.div>
+
+        <motion.div variants={item} className="glass-card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Clock className="w-4 h-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Recent Events</h2>
+          </div>
+          <div className="space-y-2">
+            {events.length === 0 && <p className="text-sm text-muted-foreground">No events yet.</p>}
+            {events.map((ev, i) => (
+              <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-muted/20 hover:bg-muted/30 transition-colors">
+                <div className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-foreground truncate">{ev.action}</p>
+                  <p className="text-[11px] text-muted-foreground">by {ev.user} · {ev.time}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      </div>
+    </motion.div>
+  );
+};
+
+export default GovernanceLineage;
