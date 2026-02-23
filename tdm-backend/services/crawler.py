@@ -81,8 +81,11 @@ class TestCaseCrawler:
         }
         
         try:
-            page.goto(url, timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=10000)
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                page.wait_for_load_state("load", timeout=5000)
             
             # Phase 1: Extract from forms
             forms = page.query_selector_all("form")
@@ -136,7 +139,10 @@ class TestCaseCrawler:
         
     def _extract_field_info(self, element) -> Dict:
         """Extract field information from an input element."""
-        tag_name = element.evaluate("el => el.tagName").lower()
+        try:
+            tag_name = (element.evaluate("el => el.tagName") or "input").lower()
+        except Exception:
+            tag_name = "input"
         field_type = element.get_attribute("type") or "text"
         name = element.get_attribute("name") or element.get_attribute("id") or element.get_attribute("placeholder") or ""
         

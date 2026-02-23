@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     azure_api_version: str = "2024-02-01"
     azure_openai_temperature: float = 0.1
 
-    # API
-    api_port: int = 8002
+    # API (8003 avoids WinError 10013 on some Windows systems; use API_PORT=8002 if preferred)
+    api_port: int = 8003
     log_level: str = "INFO"
 
     # Dataset store: local path when MinIO not used

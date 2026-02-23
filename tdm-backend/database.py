@@ -7,6 +7,8 @@ engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,
     echo=False,
+    # Disable insertmanyvalues to avoid UUID sentinel mismatch with PostgreSQL
+    use_insertmanyvalues=False,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

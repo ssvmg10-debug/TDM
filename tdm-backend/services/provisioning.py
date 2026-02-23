@@ -31,8 +31,11 @@ def run_provision(
         else:
             job = db.query(Job).get(job_id)
 
-        def log(msg: str, level: str = "info"):
-            db.add(JobLog(job_id=job_id, level=level, message=msg))
+        def log(msg: str, level: str = "info", details: dict | None = None):
+            entry = JobLog(job_id=job_id, level=level, message=msg, step="provision")
+            if details is not None:
+                entry.details = details
+            db.add(entry)
             db.commit()
 
         log("Starting provisioning")
@@ -54,8 +57,19 @@ def run_provision(
 
         base_dir = get_dataset_dir(dataset_version_id)
         if not base_dir.exists():
-            log("Dataset not found", "error")
+            log("Dataset not found", "error", {"dataset_version_id": dataset_version_id})
             job.status = "failed"
+            job.result_json = {"error": "Dataset directory not found", "dataset_version_id": dataset_version_id}
+            job.finished_at = datetime.utcnow()
+            db.commit()
+            return {"job_id": job_id, "status": "failed"}
+
+        parquet_files = sorted(base_dir.glob("*.parquet"))
+        if not parquet_files:
+            log("No parquet files in dataset", "error", {"dataset_version_id": dataset_version_id})
+            job.status = "failed"
+            job.result_json = {"error": "No parquet files in dataset", "dataset_version_id": dataset_version_id}
+            job.finished_at = datetime.utcnow()
             db.commit()
             return {"job_id": job_id, "status": "failed"}
 
@@ -63,7 +77,7 @@ def run_provision(
         tables_loaded = []
         row_counts = {}
         try:
-            for parquet_file in sorted(base_dir.glob("*.parquet")):
+            for parquet_file in parquet_files:
                 tname = parquet_file.stem
                 df = pd.read_parquet(parquet_file)
                 with engine.connect() as conn:
@@ -72,7 +86,7 @@ def run_provision(
                 df.to_sql(tname, engine, if_exists="replace", index=False, method="multi", chunksize=1000)
                 tables_loaded.append(tname)
                 row_counts[tname] = len(df)
-                log(f"Loaded {tname}: {len(df)} rows", "success")
+                log(f"Loaded {tname}: {len(df)} rows", "completed", {"table": tname, "rows": len(df)})
             if run_smoke_tests:
                 for t in tables_loaded:
                     with engine.connect() as conn:

@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Server, RefreshCw, Terminal } from "lucide-react";
+import { Server, RefreshCw, Terminal, GitBranch, FileCode } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -10,13 +10,17 @@ const item = { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0, transiti
 
 const EnvironmentProvisioning = () => {
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
-  const [targetEnv, setTargetEnv] = useState("QA");
+  const [targetEnv, setTargetEnv] = useState("default");
   const queryClient = useQueryClient();
 
   const { data: environments = [] } = useQuery({ queryKey: ["environments"], queryFn: () => api.listEnvironments() });
   const { data: datasets = [] } = useQuery({ queryKey: ["datasets"], queryFn: () => api.listDatasets() });
   const provisionMutation = useMutation({
-    mutationFn: () => api.provision({ dataset_version_id: selectedDatasetId || datasets[0]?.id!, target_env: targetEnv, reset_env: true, run_smoke_tests: true }),
+    mutationFn: () => {
+      const dsId = selectedDatasetId || datasets[0]?.id;
+      if (!dsId) throw new Error("No dataset selected");
+      return api.provision({ dataset_version_id: dsId, target_env: targetEnv, reset_env: true, run_smoke_tests: true });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       toast.success("Provision job started. Check job logs below.");
@@ -31,6 +35,17 @@ const EnvironmentProvisioning = () => {
     refetchInterval: 2000,
   });
   const logs = jobDetail?.logs ?? [];
+
+  const { data: schemaEvolution } = useQuery({
+    queryKey: ["schema-evolution", selectedDatasetId],
+    queryFn: () => api.getSchemaEvolution(selectedDatasetId),
+    enabled: !!selectedDatasetId,
+  });
+  const { data: migrationScript } = useQuery({
+    queryKey: ["migration-script", selectedDatasetId],
+    queryFn: () => api.getMigrationScript(selectedDatasetId),
+    enabled: !!selectedDatasetId,
+  });
 
   return (
     <motion.div variants={container} initial="hidden" animate="show" className="space-y-6 max-w-[1600px] mx-auto">
@@ -70,6 +85,7 @@ const EnvironmentProvisioning = () => {
           <div>
             <label className="text-xs text-muted-foreground block">Dataset</label>
             <select value={selectedDatasetId} onChange={(e) => setSelectedDatasetId(e.target.value)} className="mt-1 px-3 py-2 rounded-lg bg-muted/50 border border-border text-sm w-64">
+              <option value="">Select dataset...</option>
               {datasets.map((d) => (
                 <option key={d.id} value={d.id}>{d.name || d.id.slice(0, 8)}</option>
               ))}
@@ -78,6 +94,7 @@ const EnvironmentProvisioning = () => {
           <div>
             <label className="text-xs text-muted-foreground block">Target env</label>
             <select value={targetEnv} onChange={(e) => setTargetEnv(e.target.value)} className="mt-1 px-3 py-2 rounded-lg bg-muted/50 border border-border text-sm w-32">
+              <option value="default">default</option>
               <option value="QA">QA</option>
               <option value="SIT">SIT</option>
               <option value="UAT">UAT</option>
@@ -102,6 +119,39 @@ const EnvironmentProvisioning = () => {
           {provisionMutation.isPending && logs.length === 0 && <p className="text-muted-foreground">Starting...</p>}
         </div>
       </motion.div>
+
+      {selectedDatasetId && (
+        <motion.div variants={item} className="glass-card p-5 space-y-4">
+          <div className="flex items-center gap-2">
+            <GitBranch className="w-4 h-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Schema Evolution (Phase 6)</h2>
+          </div>
+          {schemaEvolution && !("error" in schemaEvolution) && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div className="p-2 rounded bg-muted/30">
+                <span className="text-muted-foreground">New tables:</span> {schemaEvolution.new_tables?.length ?? 0}
+              </div>
+              <div className="p-2 rounded bg-muted/30">
+                <span className="text-muted-foreground">Modified:</span> {schemaEvolution.modified_tables?.length ?? 0}
+              </div>
+              <div className="p-2 rounded bg-muted/30">
+                <span className="text-muted-foreground">Dropped:</span> {schemaEvolution.dropped_tables?.length ?? 0}
+              </div>
+            </div>
+          )}
+          {migrationScript && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <FileCode className="w-4 h-4" />
+                <span className="text-xs font-medium">Migration Script</span>
+              </div>
+              <pre className="text-xs bg-muted/30 p-3 rounded overflow-auto max-h-32 font-mono">
+                {migrationScript.script || "-- No changes needed"}
+              </pre>
+            </div>
+          )}
+        </motion.div>
+      )}
     </motion.div>
   );
 };

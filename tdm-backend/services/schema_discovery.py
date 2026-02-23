@@ -72,21 +72,22 @@ def run_discovery(
                         row_count = r
                 except Exception as e:
                     logger.warning("Count failed for %s.%s: %s", schema_ns, tname, e)
-            t = TableMeta(schema_version_id=schema_version_id, name=tname, schema_name=schema_ns, row_count=row_count)
+            t = TableMeta(schema_version_id=str(schema_version_id), name=tname, schema_name=schema_ns, row_count=row_count)
             db.add(t)
             db.flush()
-            table_id_by_key[(schema_ns, tname)] = t.id
+            table_id_by_key[(schema_ns, tname)] = str(t.id)
 
         for (schema_ns, tname), table_id in table_id_by_key.items():
             for col in inspector.get_columns(tname, schema=schema_ns):
                 c = ColumnMeta(
-                    table_id=table_id,
+                    table_id=str(table_id),
                     name=col["name"],
                     data_type=str(col.get("type", "")) if col.get("type") else None,
                     nullable=col.get("nullable", True),
                     ordinal_position=col.get("ordinal_position"),
                 )
                 db.add(c)
+            db.flush()
         db.commit()
 
         # Refresh to get column ids
@@ -94,7 +95,7 @@ def run_discovery(
             tbl = db.query(TableMeta).filter(TableMeta.id == table_id).first()
             if not tbl:
                 continue
-            col_ids = {c.name: c.id for c in tbl.columns}
+            col_ids = {c.name: str(c.id) for c in tbl.columns}
             for fk in inspector.get_foreign_keys(tname, schema=schema_ns):
                 parent_schema = fk.get("referred_schema") or schema_ns
                 parent_table = fk["referred_table"]
@@ -105,13 +106,13 @@ def run_discovery(
                     child_col_id = col_ids.get(uc)
                     parent_tid = table_id_by_key[parent_key]
                     parent_tbl = db.query(TableMeta).filter(TableMeta.id == parent_tid).first()
-                    parent_col_id = {c.name: c.id for c in parent_tbl.columns}.get(rc) if parent_tbl else None
+                    parent_col_id = {c.name: str(c.id) for c in parent_tbl.columns}.get(rc) if parent_tbl else None
                     if child_col_id and parent_col_id:
                         rel = Relationship(
-                            parent_table_id=parent_tid,
-                            child_table_id=table_id,
-                            parent_column_id=parent_col_id,
-                            child_column_id=child_col_id,
+                            parent_table_id=str(parent_tid),
+                            child_table_id=str(table_id),
+                            parent_column_id=str(parent_col_id),
+                            child_column_id=str(child_col_id),
                         )
                         db.add(rel)
         db.commit()

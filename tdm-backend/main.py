@@ -59,13 +59,16 @@ from routers import (
     audit,
     rules,
     workflow,
+    quality,
+    schema_fusion,
 )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from config import settings
     logger.info("[READY] Application startup complete")
-    logger.info("[INFO] API Documentation: http://localhost:8002/docs")
-    logger.info("[INFO] Base URL: http://localhost:8002/api/v1")
+    logger.info(f"[INFO] API Documentation: http://localhost:{settings.api_port}/docs")
+    logger.info(f"[INFO] Base URL: http://localhost:{settings.api_port}/api/v1")
     logger.info("=" * 80)
     yield
     logger.info("[SHUTDOWN] Shutting down TDM Backend")
@@ -88,18 +91,35 @@ app.add_middleware(
 )
 
 
+# Skip logging for successful GET polling (reduces noise)
+def _should_skip_log(path: str, method: str, status_code: int) -> bool:
+    """Skip logging for 200 OK on polling endpoints."""
+    if status_code >= 400:
+        return False
+    if method != "GET":
+        return False
+    return (
+        "target-tables" in path
+        or "workflow/logs" in path
+        or (path.rstrip("/").endswith("/jobs") and "job/" not in path)
+    )
+
+
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         start = time.perf_counter()
-        sys.stdout.write(f"[REQUEST] {request.method} {request.url.path}\n")
-        sys.stdout.flush()
-        logger.info(f"[REQUEST] {request.method} {request.url.path}")
         response = await call_next(request)
         duration_ms = (time.perf_counter() - start) * 1000
-        status = "OK" if response.status_code < 400 else "ERROR"
-        sys.stdout.write(f"[{status}] {request.method} {request.url.path} -> {response.status_code} ({duration_ms:.0f}ms)\n")
+        status_code = response.status_code
+        path = request.url.path
+
+        if _should_skip_log(path, request.method, status_code):
+            return response
+
+        status = "OK" if status_code < 400 else "ERROR"
+        sys.stdout.write(f"[{status}] {request.method} {path} -> {status_code} ({duration_ms:.0f}ms)\n")
         sys.stdout.flush()
-        logger.info(f"[{status}] {request.method} {request.url.path} -> {response.status_code} ({duration_ms:.0f}ms)")
+        logger.info(f"[{status}] {request.method} {path} -> {status_code} ({duration_ms:.0f}ms)")
         return response
 
 
@@ -135,11 +155,41 @@ logger.info("   • Rules")
 app.include_router(rules.router, prefix="/api/v1", tags=["rules"])
 logger.info("   • Workflow (Orchestration)")
 app.include_router(workflow.router, prefix="/api/v1", tags=["workflow"])
+logger.info("   • Quality (Synthetic Quality Engine)")
+app.include_router(quality.router, prefix="/api/v1", tags=["quality"])
+logger.info("   • Schema Fusion")
+app.include_router(schema_fusion.router, prefix="/api/v1", tags=["schema_fusion"])
 
 
 @app.get("/health")
 def health():
+    """Basic liveness check."""
     return {"status": "ok"}
+
+
+@app.get("/health/db")
+def health_db():
+    """Production-grade health: check metadata DB and optionally target DB connectivity."""
+    from sqlalchemy import text, create_engine
+    from database import engine
+    from config import settings
+    result = {"status": "ok", "database": "unknown", "target_database": "unknown"}
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        result["database"] = "connected"
+    except Exception as e:
+        result["status"] = "degraded"
+        result["database"] = str(e)
+    try:
+        target = create_engine(settings.target_database_url, pool_pre_ping=True)
+        with target.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        target.dispose()
+        result["target_database"] = "connected"
+    except Exception as e:
+        result["target_database"] = str(e)
+    return result
 
 
 if __name__ == "__main__":

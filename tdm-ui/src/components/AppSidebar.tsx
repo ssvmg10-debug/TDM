@@ -2,9 +2,8 @@ import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
-  LayoutDashboard, Database, Shield, Scissors, Eye, Factory,
-  GitBranch, BookOpen, Server, Network, FileText, Settings,
-  ChevronLeft, ChevronRight, Zap
+  LayoutDashboard, Database, GitBranch, BookOpen, Server, Network, FileText, Settings,
+  ChevronLeft, ChevronRight, Zap, User, Layers, BarChart3
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -21,12 +20,15 @@ const navSections = [
     items: [
       { label: "Dataset Catalog", path: "/datasets", icon: BookOpen },
       { label: "Environments", path: "/environments", icon: Server },
+      { label: "Schema Fusion", path: "/schema-fusion", icon: Layers },
+      { label: "Quality Dashboard", path: "/quality", icon: BarChart3 },
     ],
   },
   {
     label: "Admin",
     items: [
-      { label: "Governance", path: "/governance", icon: Network },
+      { label: "Profile", path: "/profile", icon: User },
+      { label: "Governance & Lineage", path: "/governance", icon: Network },
       { label: "Audit Logs", path: "/audit-logs", icon: FileText },
       { label: "Settings", path: "/settings", icon: Settings },
     ],
@@ -54,7 +56,7 @@ export function AppSidebar() {
             animate={{ opacity: 1 }}
             className="font-display font-bold text-foreground text-sm tracking-tight whitespace-nowrap"
           >
-            TestForge
+            FusionDataX
           </motion.span>
         )}
       </div>

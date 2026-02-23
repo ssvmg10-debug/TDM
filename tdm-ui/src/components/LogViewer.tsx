@@ -3,29 +3,45 @@ import { api } from "@/api/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Clock, CheckCircle2, XCircle, AlertCircle, Info } from "lucide-react";
+import { Clock, CheckCircle2, XCircle, AlertCircle, Info, Radio } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 interface LogViewerProps {
   jobId: string;
   autoRefresh?: boolean;
   refreshInterval?: number;
+  /** When true, stops polling to avoid endless loop after job completes */
+  isJobComplete?: boolean;
 }
 
-export function LogViewer({ jobId, autoRefresh = true, refreshInterval = 2000 }: LogViewerProps) {
+export function LogViewer({ jobId, autoRefresh = true, refreshInterval = 1000, isJobComplete = false }: LogViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  
   const { data, isLoading, error } = useQuery({
     queryKey: ["workflow-logs", jobId],
     queryFn: () => api.getWorkflowLogs(jobId),
-    refetchInterval: autoRefresh ? refreshInterval : false,
     enabled: !!jobId,
+    staleTime: 0,
+    gcTime: 0,
+    refetchInterval: (query) => {
+      const d = query.state.data as { job_status?: string } | undefined;
+      const jobDone = d?.job_status === "completed" || d?.job_status === "failed";
+      return autoRefresh && !isJobComplete && !jobDone ? refreshInterval : false;
+    },
+    refetchOnWindowFocus: (query) => {
+      const d = query.state.data as { job_status?: string } | undefined;
+      const jobDone = d?.job_status === "completed" || d?.job_status === "failed";
+      return autoRefresh && !isJobComplete && !jobDone;
+    },
   });
+  const jobDoneFromLogs = data?.job_status === "completed" || data?.job_status === "failed";
+  const shouldPoll = autoRefresh && !!jobId && !isJobComplete && !jobDoneFromLogs;
 
-  // Auto-scroll to bottom when new logs arrive
+  // Auto-scroll to bottom when new logs arrive (ScrollArea viewport is the parent)
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    const viewport = el?.parentElement;
+    if (viewport) {
+      viewport.scrollTop = viewport.scrollHeight;
     }
   }, [data?.logs]);
 
@@ -103,22 +119,31 @@ export function LogViewer({ jobId, autoRefresh = true, refreshInterval = 2000 }:
               Real-time execution logs for job {jobId.substring(0, 8)}...
             </CardDescription>
           </div>
-          <Badge variant="outline" className="font-mono text-xs">
-            {data?.logs?.length || 0} entries
-          </Badge>
+          <div className="flex items-center gap-2">
+            {shouldPoll && (
+              <Badge variant="secondary" className="text-xs gap-1">
+                <Radio className="w-3 h-3 animate-pulse" />
+                Live
+              </Badge>
+            )}
+            <Badge variant="outline" className="font-mono text-xs">
+              {data?.logs?.length ?? 0} entries
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent>
-        <ScrollArea className="h-[400px] w-full rounded-lg border bg-muted/20 p-4" ref={scrollRef}>
-          {data?.logs && data.logs.length > 0 ? (
+        <ScrollArea className="h-[400px] w-full rounded-lg border bg-muted/20 p-4">
+          <div ref={scrollRef} className="min-h-full">
+          {Array.isArray(data?.logs) && data.logs.length > 0 ? (
             <div className="space-y-3">
-              {data.logs.map((log, idx) => (
+              {data.logs.map((log: { timestamp?: string; step?: string; level?: string; message?: string; details?: Record<string, unknown> }, idx: number) => (
                 <div
                   key={idx}
                   className="flex gap-3 p-3 rounded-lg bg-background border border-border hover:border-primary/50 transition-colors"
                 >
                   <div className="flex-shrink-0 mt-1">
-                    {getLevelIcon(log.level)}
+                    {getLevelIcon(log.level ?? "info")}
                   </div>
                   <div className="flex-1 space-y-2 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -130,18 +155,18 @@ export function LogViewer({ jobId, autoRefresh = true, refreshInterval = 2000 }:
                           {log.step}
                         </Badge>
                       )}
-                      <Badge variant={getLevelBadgeColor(log.level) as any} className="text-xs">
+                      <Badge variant={getLevelBadgeColor(log.level ?? "info") as "default" | "destructive" | "outline" | "secondary"} className="text-xs">
                         {log.level || "info"}
                       </Badge>
-                      {log.timestamp && (
+                      {(log.timestamp || (log as { created_at?: string }).created_at) && (
                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
                           <Clock className="w-3 h-3" />
-                          {new Date(log.timestamp).toLocaleTimeString()}
+                          {new Date((log.timestamp ?? (log as { created_at?: string }).created_at) ?? "").toLocaleTimeString()}
                         </div>
                       )}
                     </div>
-                    <p className="text-sm text-foreground break-words">{log.message}</p>
-                    {log.details && Object.keys(log.details).length > 0 && (
+                    <p className="text-sm text-foreground break-words">{log.message ?? ""}</p>
+                    {log.details && typeof log.details === "object" && Object.keys(log.details).length > 0 && (
                       <details className="text-xs">
                         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
                           View details
@@ -164,6 +189,7 @@ export function LogViewer({ jobId, autoRefresh = true, refreshInterval = 2000 }:
               </div>
             </div>
           )}
+          </div>
         </ScrollArea>
       </CardContent>
     </Card>

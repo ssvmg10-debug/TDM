@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 import logging
 
-from database import get_db
+from database import get_db, SessionLocal
 from services.workflow_orchestrator import execute_workflow
 
 logger = logging.getLogger("tdm.api")
@@ -189,8 +189,9 @@ async def execute_tdm_workflow(
     workflow_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
     
-    # Execute workflow in background with error handling
+    # Execute workflow in background with its own DB session so logs are persisted
     def run_workflow_with_error_handling():
+        db = SessionLocal()
         try:
             print(f"[WORKFLOW] Starting background execution: workflow_id={workflow_id}, job_id={job_id}", flush=True)
             logger.info(f"[WORKFLOW] Starting background execution: workflow_id={workflow_id}, job_id={job_id}")
@@ -202,9 +203,9 @@ async def execute_tdm_workflow(
                 domain=request.domain,
                 operations=request.operations,
                 config=request.config,
-                db=None,  # Let execute_workflow create its own session
+                db=db,
                 workflow_id=workflow_id,
-                job_id=job_id
+                job_id=job_id,
             )
             print(f"[WORKFLOW] Completed: workflow_id={workflow_id}, status={result.get('overall_status')}", flush=True)
             logger.info(f"[WORKFLOW] Completed: workflow_id={workflow_id}, status={result.get('overall_status')}")
@@ -213,6 +214,8 @@ async def execute_tdm_workflow(
             logger.error(f"[WORKFLOW ERROR] {workflow_id}: {str(e)}")
             import traceback
             traceback.print_exc()
+        finally:
+            db.close()
     
     background_tasks.add_task(run_workflow_with_error_handling)
     
@@ -235,22 +238,82 @@ async def get_workflow_logs(
     db: Session = Depends(get_db)
 ):
     """
-    Get logs for a specific workflow job
+    Get logs for a specific workflow job. Logs are written by the orchestrator
+    and polled by the UI so they appear while the workflow is running.
+    Includes job_status so the UI can stop polling when the job completes.
     """
-    from models import JobLog
-    logs = db.query(JobLog).filter(JobLog.job_id == job_id).order_by(JobLog.timestamp).all()
+    from models import JobLog, Job
+    job_id_str = str(job_id)
+    job = db.query(Job).filter(Job.id == job_id_str).first()
+    job_status = job.status if job else None
+    logs = db.query(JobLog).filter(JobLog.job_id == job_id_str).order_by(JobLog.created_at).all()
     return {
-        "job_id": job_id,
+        "job_id": job_id_str,
+        "job_status": job_status,
         "logs": [
             {
-                "timestamp": log.timestamp.isoformat() if log.timestamp else None,
-                "step": log.step,
-                "level": log.level,
-                "message": log.message,
-                "details": log.details
+                "timestamp": log.created_at.isoformat() if log.created_at else None,
+                "step": getattr(log, "step", None) or "",
+                "level": (log.level or "info"),
+                "message": (log.message or ""),
+                "details": (getattr(log, "details", None) or {}) if isinstance(getattr(log, "details", None), dict) else {},
             }
             for log in logs
-        ]
+        ],
+    }
+
+
+class ClassifyIntentRequest(BaseModel):
+    """Request for intent classification (Dynamic Decision Engine)."""
+    test_case_content: Optional[str] = None
+    test_case_urls: Optional[List[str]] = None
+    connection_string: Optional[str] = None
+    domain: Optional[str] = None
+    schema_version_id: Optional[str] = None
+    config_flags: Optional[Dict[str, Any]] = None
+
+
+@router.post("/classify-intent")
+async def classify_workflow_intent(body: ClassifyIntentRequest):
+    """
+    Classify intent and get recommended operations (Dynamic Decision Engine).
+    Returns: intent, operations, preferred_synthetic_mode, plan.
+    """
+    from services.decision_engine import classify_intent, generate_pipeline_plan
+    intent = classify_intent(
+        test_case_content=body.test_case_content,
+        test_case_urls=body.test_case_urls,
+        connection_string=body.connection_string,
+        domain=body.domain,
+        schema_version_id=body.schema_version_id,
+        config_flags=body.config_flags or {},
+    )
+    plan = generate_pipeline_plan(intent)
+    return {
+        "intent": intent,
+        "plan": plan,
+        "operations": plan.get("operations", []),
+        "preferred_synthetic_mode": intent.get("preferred_synthetic_mode", "schema"),
+    }
+
+
+class AnalyzeTestCaseRequest(BaseModel):
+    test_case_content: Optional[str] = None
+
+
+@router.post("/analyze-test-case")
+async def analyze_test_case_content(body: AnalyzeTestCaseRequest):
+    """
+    Analyze test case content to determine if synthetic data generation is needed.
+    Returns whether the test case has form fields (Enter/fill patterns) that require data.
+    """
+    from services.synthetic_enhanced import SyntheticDataGenerator
+    generator = SyntheticDataGenerator()
+    needs_synthetic, reason = generator.test_case_needs_synthetic_data(body.test_case_content or "")
+    return {
+        "needs_synthetic_data": needs_synthetic,
+        "reason": reason,
+        "hint": "Synthetic data will be generated" if needs_synthetic else "No form fields - synthetic step will be skipped (faster)"
     }
 
 
@@ -354,32 +417,37 @@ async def get_workflow_status(workflow_id: str, db: Session = Depends(get_db)):
     Get status of a running or completed workflow
     """
     from models import Job, JobLog
-    
-    # Find workflow job
-    job = db.query(Job).filter(Job.details["workflow_id"].astext == workflow_id).first()
-    
+
+    # Find workflow job by workflow_id stored in request_json
+    job = db.query(Job).filter(
+        Job.operation == "workflow",
+        Job.request_json["workflow_id"].astext == workflow_id,
+    ).first()
+
     if not job:
         return {"error": "Workflow not found"}
-    
-    # Get all logs for this workflow
-    logs = db.query(JobLog).filter(JobLog.job_id == job.job_id).order_by(JobLog.timestamp).all()
-    
+
+    logs = db.query(JobLog).filter(JobLog.job_id == job.id).order_by(JobLog.created_at).all()
+    error = None
+    if job.result_json and isinstance(job.result_json, dict):
+        error = job.result_json.get("error")
+
     return {
         "workflow_id": workflow_id,
-        "job_id": job.job_id,
+        "job_id": job.id,
         "status": job.status,
-        "start_time": job.start_time.isoformat() if job.start_time else None,
-        "end_time": job.end_time.isoformat() if job.end_time else None,
-        "details": job.details,
-        "error": job.error,
+        "start_time": job.started_at.isoformat() if job.started_at else None,
+        "end_time": job.finished_at.isoformat() if job.finished_at else None,
+        "details": job.result_json or job.request_json or {},
+        "error": error,
         "logs": [
             {
-                "step": log.step,
-                "status": log.status,
+                "step": getattr(log, "step", None),
+                "status": log.level,
                 "message": log.message,
-                "timestamp": log.timestamp.isoformat(),
-                "details": log.details
+                "timestamp": log.created_at.isoformat() if log.created_at else None,
+                "details": getattr(log, "details", None) or {},
             }
             for log in logs
-        ]
+        ],
     }

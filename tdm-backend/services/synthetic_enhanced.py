@@ -226,7 +226,7 @@ class SyntheticDataGenerator:
         job_id: Optional[str] = None
     ) -> str:
         """Generate synthetic data from raw test case content (Cucumber, Selenium, manual steps)."""
-        logger.info("📄 Generating from test case content...")
+        logger.info("Generating from test case content...")
         db = SessionLocal()
         try:
             if not job_id:
@@ -249,15 +249,31 @@ class SyntheticDataGenerator:
 
             log("Starting synthetic generation from test case content")
             logger.info(f"   Content length: {len(test_case_content)} characters")
-            
+
+            # Check if test case needs synthetic data (has form fields)
+            needs_synthetic, reason = self.test_case_needs_synthetic_data(test_case_content)
+            if not needs_synthetic:
+                log(f"Skipping synthetic: {reason}", "info")
+                logger.info(f"   {reason}")
+                job.status = "completed"
+                job.result_json = {"skipped": True, "reason": reason, "dataset_version_id": None}
+                db.commit()
+                return None
+
             # Parse test case content to extract fields
             schema = self._parse_test_case_content(test_case_content)
-            
+            if not schema.get("has_form_fields", True):
+                log("No form fields parsed - skipping synthetic generation", "info")
+                job.status = "completed"
+                job.result_json = {"skipped": True, "reason": "No form fields in test case", "dataset_version_id": None}
+                db.commit()
+                return None
+
             entities_count = len(schema.get('entities', {}))
-            logger.info(f"   ✅ Parsed {entities_count} entities from test case")
+            logger.info(f"   Parsed {entities_count} entities from test case")
             for entity_name, entity_info in schema.get('entities', {}).items():
                 fields_count = len(entity_info.get('fields', {}))
-                logger.info(f"      • {entity_name}: {fields_count} fields")
+                logger.info(f"      - {entity_name}: {fields_count} fields")
             
             log(f"Parsed schema with {entities_count} entities from test case content")
             
@@ -422,23 +438,59 @@ class SyntheticDataGenerator:
         finally:
             db.close()
     
+    def test_case_needs_synthetic_data(self, content: str) -> tuple[bool, str]:
+        """
+        Detect if test case content indicates form fields that need synthetic data.
+        Returns (needs_synthetic, reason).
+        """
+        if not content or not content.strip():
+            return False, "Empty test case"
+        content_lower = content.lower()
+        # Patterns that indicate form/data entry
+        patterns = [
+            (r'(?:enter|input|type|fill)\s+\w+\s+as\s+', "Enter X as Y"),
+            (r'(?:enter|input|type|fill)\s+[\w\s]+\s+(?:in|into|to)\s+', "Enter X in Y field"),
+            (r'fill\s+(?:the\s+)?(?:billing|shipping|pincode|email|address|details)', "Fill form fields"),
+            (r'fill\s+[\w\s]+\s+as\s+', "Fill X as Y"),
+            (r'fill\s+[\w\s]+\s+with\s+', "Fill X with Y"),
+            # "fill all the required details", "fill required details", "fill checkout details"
+            (r'fill\s+(?:all\s+)?(?:the\s+)?(?:required\s+)?details', "Fill required details"),
+            (r'fill\s+.*\bdetails\b', "Fill details (generic)"),
+            (r'checkout\s+.*\bfill\b|\bfill\b.*\bcheckout\b', "Checkout with fill"),
+        ]
+        for pat, desc in patterns:
+            if re.search(pat, content_lower):
+                return True, desc
+        # Vague "fill details" - assume needs data
+        if re.search(r'fill\s+(?:billing|shipping|details)', content_lower):
+            return True, "Fill form details"
+        return False, "No form field patterns detected (navigation/click-only test)"
+
     def _parse_test_case_content(self, content: str) -> Dict[str, Any]:
         """Parse test case content to extract entity and field information."""
         import re
-        
+
         entities = {}
-        
+
         # Parse Cucumber-style "Given/When/Then" steps
         cucumber_pattern = r'(?:Given|When|And|Then)\s+I\s+enter\s+"([^"]+)"\s+in\s+the\s+"?([^"\n]+)"?\s+field'
         matches = re.findall(cucumber_pattern, content, re.IGNORECASE)
-        
+
         # Parse Selenium-style findElement calls
         selenium_pattern = r'findElement\(By\.(?:id|name|xpath|css)\("([^"]+)"\)\)'
         selenium_matches = re.findall(selenium_pattern, content, re.IGNORECASE)
-        
+
         # Parse manual test step patterns like "Enter X in Y field"
         manual_pattern = r'(?:enter|input|type|fill)\s+["\']?([^"\']+)["\']?\s+(?:in|into|to|for)\s+(?:the\s+)?["\']?([^"\']+)["\']?\s+field'
         manual_matches = re.findall(manual_pattern, content, re.IGNORECASE)
+
+        # Parse "Enter <field> as <value>" (e.g. "Enter pincode as 500032", "Enter email as test@gmail.com")
+        enter_as_pattern = r'(?i)(?:enter|input|type)\s+([a-z0-9_\s]+?)\s+as\s+([^\n"]+?)(?=\s+in\s+the|\s*,\s*|\s*$|\n|$)'
+        enter_as_matches = re.findall(enter_as_pattern, content)
+
+        # Parse "fill X as Y" / "fill X with Y"
+        fill_pattern = r'(?i)fill\s+(?:the\s+)?([a-z0-9_\s]+?)\s+(?:as|with)\s+([^\n"]+?)(?=\s+in\s+|\s*,\s*|\s*$|\n|$)'
+        fill_matches = re.findall(fill_pattern, content)
         
         # Combine all matches
         all_fields = []
@@ -456,7 +508,21 @@ class SyntheticDataGenerator:
         # Manual test matches (value, field_name)
         for value, field_name in manual_matches:
             all_fields.append((field_name.strip(), value))
-        
+
+        # "Enter X as Y" matches (field_name, value)
+        for field_name, value in enter_as_matches:
+            fn = field_name.strip()
+            val = value.strip().strip('"\'')
+            if fn and val:
+                all_fields.append((fn, val))
+
+        # "Fill X as Y" / "Fill X with Y" matches
+        for field_name, value in fill_matches:
+            fn = field_name.strip()
+            val = value.strip().strip('"\'')
+            if fn and val:
+                all_fields.append((fn, val))
+
         # Create a default entity if fields found
         if all_fields:
             entity_name = "user"  # Default entity name
@@ -474,21 +540,29 @@ class SyntheticDataGenerator:
                     "sample_value": sample_value
                 }
         
-        # If no fields found, create a minimal default schema
-        if not entities:
-            logger.warning("No fields found in test case content, using default schema")
-            entities = {
-                "user": {
-                    "fields": {
-                        "id": {"type": "integer"},
-                        "name": {"type": "string"},
-                        "email": {"type": "email"},
-                        "created_at": {"type": "datetime"}
-                    }
+        # Fallback: "fill details" / "fill required details" / "checkout" without specific fields
+        # Use common checkout form fields
+        if not entities and re.search(r'(?:fill\s+.*\bdetails\b|checkout\s+.*\bfill\b|\bfill\b.*\bcheckout\b)', content, re.IGNORECASE):
+            logger.info("Detected fill/checkout pattern - using default checkout form fields")
+            entities["checkout"] = {
+                "fields": {
+                    "full_name": {"type": "name", "sample_value": None},
+                    "email": {"type": "email", "sample_value": None},
+                    "phone": {"type": "phone", "sample_value": None},
+                    "address": {"type": "address", "sample_value": None},
+                    "city": {"type": "city", "sample_value": None},
+                    "zip_code": {"type": "zipcode", "sample_value": None},
+                    "country": {"type": "country", "sample_value": None},
                 }
             }
-        
-        return {"entities": entities}
+            return {"entities": entities, "has_form_fields": True}
+
+        # If no fields found, return empty - caller will skip synthetic generation
+        if not entities:
+            logger.info("No form fields found in test case content - synthetic data not needed")
+            return {"entities": {}, "has_form_fields": False}
+
+        return {"entities": entities, "has_form_fields": True}
     
     def _infer_field_type(self, field_name: str, sample_value: Optional[str] = None) -> str:
         """Infer field type from field name and optional sample value."""
@@ -501,7 +575,7 @@ class SyntheticDataGenerator:
             return "phone"
         elif "password" in field_name_lower:
             return "password"
-        elif "address" in field_name_lower:
+        elif "address" in field_name_lower or "street" in field_name_lower:
             return "address"
         elif "name" in field_name_lower and "user" in field_name_lower:
             return "name"
@@ -519,7 +593,7 @@ class SyntheticDataGenerator:
             return "decimal"
         elif "url" in field_name_lower or "link" in field_name_lower:
             return "url"
-        elif "zip" in field_name_lower or "postal" in field_name_lower:
+        elif "zip" in field_name_lower or "postal" in field_name_lower or "pincode" in field_name_lower or "pin_code" in field_name_lower:
             return "zipcode"
         elif "city" in field_name_lower:
             return "city"
@@ -627,9 +701,11 @@ class SyntheticDataGenerator:
     ):
         """Save dataset metadata to database."""
         path_prefix = str(Path(settings.dataset_store_path) / version_id)
-        
+        # Ensure version_id is string for UUID(as_uuid=False) columns
+        version_id_str = str(version_id)
+
         dv = DatasetVersion(
-            id=version_id,
+            id=version_id_str,
             name=f"{source_type}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
             schema_version_id=schema_version_id,
             source_type=source_type,
@@ -637,11 +713,9 @@ class SyntheticDataGenerator:
             path_prefix=path_prefix,
         )
         db.add(dv)
-        db.flush()  # Ensure dataset_versions row exists before dataset_metadata (FK)
-        
-        # Add row counts metadata
+        db.commit()  # Commit DatasetVersion first to avoid UUID sentinel mismatch in bulk insert
         db.add(DatasetMetadata(
-            dataset_version_id=version_id,
+            dataset_version_id=version_id_str,
             meta_key="row_counts",
             meta_value=generated
         ))
@@ -650,11 +724,11 @@ class SyntheticDataGenerator:
         if extra_metadata:
             for key, value in extra_metadata.items():
                 db.add(DatasetMetadata(
-                    dataset_version_id=version_id,
+                    dataset_version_id=version_id_str,
                     meta_key=key,
                     meta_value=value if isinstance(value, (dict, list)) else {"value": value}
                 ))
-                
+
         # Add lineage
         source_id = schema_version_id or "none"
         source_type_lineage = "schema_version" if schema_version_id else "test_cases"
@@ -662,9 +736,9 @@ class SyntheticDataGenerator:
             source_type=source_type_lineage,
             source_id=source_id,
             target_type="dataset_version",
-            target_id=version_id,
+            target_id=version_id_str,
             operation=source_type,
-            job_id=job_id
+            job_id=str(job_id)
         ))
         
         # Update job

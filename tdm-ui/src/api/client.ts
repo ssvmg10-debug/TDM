@@ -1,7 +1,7 @@
 /**
- * TDM Backend API client. Set VITE_API_URL in .env (e.g. http://localhost:8002) or it defaults to that.
+ * TDM Backend API client. Set VITE_API_URL in .env (e.g. http://localhost:8003) or it defaults to that.
  */
-const BASE = import.meta.env.VITE_API_URL || "http://localhost:8002";
+const BASE = import.meta.env.VITE_API_URL || "http://localhost:8003";
 const API = `${BASE}/api/v1`;
 
 async function request<T>(
@@ -9,10 +9,18 @@ async function request<T>(
   opts: RequestInit = {}
 ): Promise<T> {
   const url = path.startsWith("http") ? path : `${API}${path}`;
-  const res = await fetch(url, {
-    ...opts,
-    headers: { "Content-Type": "application/json", ...opts.headers },
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...opts,
+      headers: { "Content-Type": "application/json", ...opts.headers },
+    });
+  } catch (e) {
+    const msg = e instanceof TypeError && String(e).includes("fetch")
+      ? `Backend not reachable at ${BASE}. Is it running? Start: cd tdm-backend && .\\start_backend.ps1`
+      : String(e);
+    throw new Error(msg);
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `HTTP ${res.status}`);
@@ -131,6 +139,10 @@ export const api = {
       tables_count: number;
     }>(`/dataset/${id}`),
 
+  // Provision - target tables (tdm_target)
+  getTargetTables: () =>
+    api.get<{ database: string; tables: string[]; count: number }>("/target-tables"),
+
   // Jobs
   listJobs: (params?: { operation?: string; status?: string }) => {
     const sp = new URLSearchParams();
@@ -145,9 +157,24 @@ export const api = {
         started_at?: string;
         finished_at?: string;
         result_json?: Record<string, unknown>;
+        request_json?: { test_case_id?: string; test_case_summary?: string; workflow_id?: string };
       }[]
     >(`/jobs${q}`);
   },
+  getJobTrace: (jobId: string) =>
+    api.get<{
+      job_id: string;
+      workflow_id?: string;
+      test_case_id?: string;
+      test_case_summary?: string;
+      operations?: string[];
+      dataset_version_id?: string;
+      provisioned_tables: string[];
+      row_counts: Record<string, number>;
+      status: string;
+      started_at?: string;
+      finished_at?: string;
+    }>(`/job/${jobId}/trace`),
   getJob: (id: string) =>
     api.get<{
       id: string;
@@ -173,10 +200,12 @@ export const api = {
     api.post<{ id: string; name: string }>("/environments", body),
 
   // Audit
-  listAuditLogs: () =>
-    api.get<
+  listAuditLogs: (params?: { limit?: number }) => {
+    const q = params?.limit ? `?limit=${params.limit}` : "";
+    return api.get<
       { id: string; action: string; target: string; user: string; role: string; time: string; severity: string }[]
-    >("/audit-logs"),
+    >(`/audit-logs${q}`);
+  },
 
   // Workflow
   executeWorkflow: (body: {
@@ -231,6 +260,7 @@ export const api = {
   getWorkflowLogs: (jobId: string) =>
     api.get<{
       job_id: string;
+      job_status?: string;
       logs: {
         timestamp: string;
         step: string;
@@ -239,6 +269,72 @@ export const api = {
         details: any;
       }[];
     }>(`/workflow/logs/${jobId}`),
+
+  analyzeTestCase: (testCaseContent: string) =>
+    api.post<{ needs_synthetic_data: boolean; reason: string; hint: string }>(
+      "/workflow/analyze-test-case",
+      { test_case_content: testCaseContent }
+    ),
+
+  // Dynamic Decision Engine
+  // Quality
+  getDatasetQuality: (datasetId: string) =>
+    api.get<{ quality_score: number; quality_report: Record<string, unknown> }>(
+      `/quality/dataset/${datasetId}`
+    ),
+
+  // Schema Fusion
+  fuseSchemas: (body: {
+    ui_schemas?: Record<string, unknown>;
+    api_schemas?: Record<string, unknown>;
+    db_schemas?: Record<string, unknown>;
+    test_case_entities?: Record<string, unknown>;
+    domain_pack?: string;
+  }) => api.post<{ unified_schema: Record<string, unknown>; tables_count: number }>("/schema-fusion/fuse", body),
+
+  // Provision enhancements
+  getSchemaEvolution: (datasetId: string) =>
+    api.get<{
+      new_tables: string[];
+      modified_tables: string[];
+      dropped_tables: string[];
+      column_diffs: Record<string, { added: string[]; removed: string[] }>;
+    }>(`/schema-evolution/${datasetId}`),
+  getMigrationScript: (datasetId: string) =>
+    api.get<{ evolution: Record<string, unknown>; script: string }>(
+      `/migration-script/${datasetId}`
+    ),
+
+  // Lineage full
+  getJobLineageFull: (jobId: string) =>
+    api.get<{
+      job_id: string;
+      job_context: Record<string, unknown>;
+      lineage: { source_type: string; source_id: string; target_type: string; target_id: string; operation?: string; details?: unknown }[];
+      fallbacks_used: unknown[];
+      quality_score?: number;
+    }>(`/lineage/job/${jobId}/full`),
+
+  classifyIntent: (body: {
+    test_case_content?: string;
+    test_case_urls?: string[];
+    connection_string?: string;
+    domain?: string;
+    schema_version_id?: string;
+    config_flags?: Record<string, unknown>;
+  }) =>
+    api.post<{
+      intent: {
+        requires_ui_crawl: boolean;
+        requires_db: boolean;
+        requires_domain_fallback: boolean;
+        operations: string[];
+        preferred_synthetic_mode: string;
+      };
+      plan: { operations: string[]; preferred_synthetic_mode: string };
+      operations: string[];
+      preferred_synthetic_mode: string;
+    }>("/workflow/classify-intent", body),
 };
 
 export default api;

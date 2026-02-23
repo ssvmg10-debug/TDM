@@ -173,6 +173,7 @@ class JobItem(BaseModel):
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     result_json: Optional[dict] = None
+    request_json: Optional[dict] = None  # For workflow jobs: test_case_id, test_case_summary, etc.
 
 
 class JobDetail(JobItem):

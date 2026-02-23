@@ -4,20 +4,22 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Search, LayoutDashboard, Database, Shield, Scissors, Eye,
   Factory, GitBranch, BookOpen, Server, Network, FileText, Settings,
-  Command, ArrowRight
+  Command, ArrowRight, Gauge, Layers
 } from "lucide-react";
 
 const commands = [
   { label: "Dashboard", path: "/", icon: LayoutDashboard },
+  { label: "Workflow Orchestrator", path: "/workflows", icon: GitBranch },
+  { label: "Dataset Catalog", path: "/datasets", icon: BookOpen },
+  { label: "Environment Provisioning", path: "/environments", icon: Server },
+  { label: "Schema Fusion", path: "/schema-fusion", icon: Layers },
+  { label: "Quality Dashboard", path: "/quality", icon: Gauge },
+  { label: "Governance & Lineage", path: "/governance", icon: Network },
   { label: "Schema Discovery", path: "/schema-discovery", icon: Database },
   { label: "PII Classification", path: "/pii-classification", icon: Shield },
   { label: "Subsetting Engine", path: "/subsetting", icon: Scissors },
   { label: "Masking Engine", path: "/masking", icon: Eye },
   { label: "Synthetic Data Factory", path: "/synthetic-data", icon: Factory },
-  { label: "Workflow Orchestrator", path: "/workflows", icon: GitBranch },
-  { label: "Dataset Catalog", path: "/datasets", icon: BookOpen },
-  { label: "Environment Provisioning", path: "/environments", icon: Server },
-  { label: "Governance & Lineage", path: "/governance", icon: Network },
   { label: "Audit Logs", path: "/audit-logs", icon: FileText },
   { label: "Settings", path: "/settings", icon: Settings },
 ];

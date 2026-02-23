@@ -27,7 +27,12 @@ function formatTime(iso: string | undefined) {
 }
 
 const DatasetCatalog = () => {
-  const { data: datasets = [], isLoading } = useQuery({ queryKey: ["datasets"], queryFn: () => api.listDatasets() });
+  const { data: datasets = [], isLoading } = useQuery({
+    queryKey: ["datasets"],
+    queryFn: () => api.listDatasets(),
+    refetchInterval: 15000,
+    staleTime: 5000,
+  });
   const { data: lineageSteps } = useQuery({
     queryKey: ["lineage-steps"],
     queryFn: async () => ["Production DB", "Subset", "PII Mask", "Synthetic Augment", "Provisioned"],
@@ -40,6 +45,28 @@ const DatasetCatalog = () => {
           <h1 className="text-2xl font-display font-bold text-foreground">Dataset Catalog</h1>
           <p className="text-sm text-muted-foreground mt-1">Browse, compare, and manage dataset versions</p>
         </div>
+        <button
+          onClick={() => {
+            const headers = ["ID", "Name", "Type", "Rows", "Tables", "Created"];
+            const rows = datasets.map((ds) => {
+              const rows = ds.row_counts && typeof ds.row_counts === "object" ? Object.values(ds.row_counts).reduce((a, b) => a + Number(b), 0) : 0;
+              const rowsStr = rows >= 1e6 ? `${(rows / 1e6).toFixed(1)}M` : rows >= 1e3 ? `${(rows / 1e3).toFixed(0)}K` : String(rows);
+              return [ds.id, ds.name || ds.id.slice(0, 8), ds.source_type, rowsStr, ds.tables_count, ds.created_at || ""].map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",");
+            });
+            const csv = [headers.join(","), ...rows].join("\n");
+            const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `dataset-catalog-${new Date().toISOString().slice(0, 10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          disabled={isLoading || datasets.length === 0}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted text-sm text-foreground hover:bg-muted/80 transition-colors disabled:opacity-50"
+        >
+          <Download className="w-3.5 h-3.5" /> Export All
+        </button>
       </motion.div>
 
       {lineageSteps && lineageSteps.length > 0 && (
@@ -82,7 +109,35 @@ const DatasetCatalog = () => {
                   <td className="py-3 pr-4 font-mono text-foreground/70">{rowsStr}</td>
                   <td className="py-3 pr-4 text-foreground/70">{ds.tables_count}</td>
                   <td className="py-3 pr-4 text-muted-foreground text-xs">{formatTime(ds.created_at)}</td>
-                  <td className="py-3"><button className="p-1.5 rounded hover:bg-muted transition-colors"><Download className="w-3.5 h-3.5 text-muted-foreground" /></button></td>
+                  <td className="py-3">
+                    <button
+                      onClick={() => {
+                        const rows = ds.row_counts && typeof ds.row_counts === "object" ? Object.values(ds.row_counts).reduce((a, b) => a + Number(b), 0) : 0;
+                        const rowsStr = rows >= 1e6 ? `${(rows / 1e6).toFixed(1)}M` : rows >= 1e3 ? `${(rows / 1e3).toFixed(0)}K` : String(rows);
+                        const row = {
+                          id: ds.id,
+                          name: ds.name || ds.id.slice(0, 8),
+                          type: ds.source_type,
+                          rows: rowsStr,
+                          tables: ds.tables_count,
+                          created: ds.created_at || "",
+                        };
+                        const headers = ["ID", "Name", "Type", "Rows", "Tables", "Created"];
+                        const csv = [headers.join(","), [row.id, row.name, row.type, row.rows, row.tables, row.created].map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")].join("\n");
+                        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `dataset-${row.name}-${new Date().toISOString().slice(0, 10)}.csv`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="p-1.5 rounded hover:bg-muted transition-colors"
+                      title="Export dataset metadata"
+                    >
+                      <Download className="w-3.5 h-3.5 text-muted-foreground" />
+                    </button>
+                  </td>
                 </tr>
               );
             })}

@@ -131,8 +131,10 @@ class JobLog(Base):
     __tablename__ = "job_logs"
     id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
     job_id = Column(UUID(as_uuid=False), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
-    level = Column(String(20))
+    level = Column(String(20))  # e.g. started, completed, failed, info
     message = Column(Text)
+    step = Column(String(100))  # workflow step name: discover, pii, subset, mask, synthetic, provision
+    details = Column(JSONB)  # optional extra data
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     job = relationship("Job", back_populates="logs")
 
@@ -146,6 +148,7 @@ class Lineage(Base):
     target_id = Column(String(255), nullable=False)
     operation = Column(String(100))
     job_id = Column(UUID(as_uuid=False), ForeignKey("jobs.id"))
+    details = Column(JSONB)  # field_level_lineage, fallbacks_used, schema_sources
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -164,4 +167,14 @@ class Environment(Base):
     name = Column(String(50), unique=True, nullable=False)
     connection_string_encrypted = Column(Text)
     config_json = Column(JSONB)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class UnifiedSchemaVersion(Base):
+    """Fused schema from UI + API + DB + Domain Packs (Schema Fusion Engine)."""
+    __tablename__ = "unified_schema_versions"
+    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    job_id = Column(UUID(as_uuid=False), ForeignKey("jobs.id"))
+    schema_json = Column(JSONB, nullable=False)  # unified_schema structure
+    sources = Column(JSONB)  # which schemas contributed
     created_at = Column(DateTime(timezone=True), server_default=func.now())
