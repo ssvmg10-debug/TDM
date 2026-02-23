@@ -74,3 +74,5 @@ tdm-backend/data/
 
 # mypy
 .mypy_cache/
+
+.env

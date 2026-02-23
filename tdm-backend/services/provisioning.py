@@ -37,9 +37,17 @@ def run_provision(
 
         log("Starting provisioning")
         env = db.query(Environment).filter(Environment.name == target_env).first()
-        connection_string = env.connection_string_encrypted if env else settings.database_url
+        
+        # Use target database by default, unless specific environment connection is configured
+        if env and env.connection_string_encrypted:
+            connection_string = env.connection_string_encrypted
+            log(f"Using environment-specific connection for '{target_env}'")
+        else:
+            connection_string = settings.target_database_url
+            log(f"Using default target database: tdm_target")
+            
         if not connection_string:
-            log("No connection string for environment", "error")
+            log("No connection string available", "error")
             job.status = "failed"
             db.commit()
             return {"job_id": job_id, "status": "failed"}

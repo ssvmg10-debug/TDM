@@ -13,6 +13,9 @@ if not _env_file.exists():
 class Settings(BaseSettings):
     # DB (metadata store) - support both DATABASE_URL and your .env names
     database_url: str = "postgresql://postgres:12345@localhost:5432/tdm"
+    
+    # Target DB (where provisioned/synthetic data is stored)
+    target_database_url: str = "postgresql://postgres:12345@localhost:5432/tdm_target"
 
     # Azure OpenAI - support AZURE_* from your .env
     azure_api_key: str = ""
@@ -37,6 +40,7 @@ class Settings(BaseSettings):
         super().__init__(**kwargs)
         # Alias common .env names
         self.database_url = os.getenv("DATABASE_URL", self.database_url)
+        self.target_database_url = os.getenv("TARGET_DATABASE_URL", self.target_database_url)
         self.azure_api_key = os.getenv("AZURE_API_KEY", self.azure_api_key)
         self.azure_endpoint = os.getenv("AZURE_ENDPOINT", self.azure_endpoint)
         self.azure_deployment = os.getenv("AZURE_DEPLOYMENT", self.azure_deployment)

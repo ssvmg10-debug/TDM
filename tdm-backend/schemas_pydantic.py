@@ -71,17 +71,30 @@ class MaskResponse(BaseModel):
 
 # ---- Synthetic ----
 class SyntheticRequest(BaseModel):
+    # Mode 1: From existing schema version
     schema_version_id: Optional[str] = None
-    domain_pack: str = "ecommerce"
+    
+    # Mode 2: From test case URLs (crawl)
+    test_case_urls: Optional[list[str]] = None
+    
+    # Mode 3: From domain/scenario
+    domain: Optional[str] = None  # e.g., "ecommerce", "banking", "telecom", "healthcare"
+    scenario: Optional[str] = "default"  # scenario name within domain
+    
+    # Common parameters
     row_counts: Optional[dict[str, int]] = None
-    ui_urls: Optional[list[str]] = None
-    api_spec_url: Optional[str] = None
+    
+    # Legacy support
+    domain_pack: Optional[str] = None  # Deprecated, use 'domain' instead
+    ui_urls: Optional[list[str]] = None  # Deprecated, use 'test_case_urls' instead
+    api_spec_url: Optional[str] = None  # Future: API schema extraction
 
 
 class SyntheticResponse(BaseModel):
     job_id: str
     dataset_version_id: Optional[str] = None
     message: str = "ok"
+    entities: Optional[list[str]] = None  # List of generated entities (for crawled schemas)
 
 
 # ---- Provision ----
